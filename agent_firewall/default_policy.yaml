@@ -42,8 +42,10 @@ judge:
   cache: true
 
 approval:
-  mode: console         # console | auto_allow | auto_deny
+  mode: console         # console | auto_allow | auto_deny | web | slack
   timeout_seconds: 120
+  slack_webhook: null   # incoming-webhook URL (slack mode)
+  public_url: null      # base URL for approve/deny links (defaults to server addr)
 
 actions:
   enabled: true
