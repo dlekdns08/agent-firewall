@@ -25,7 +25,7 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import __version__, judge
+from . import __version__, judge, openai_shim
 from .approvals import AuditLog, request_approval
 from .config import Config
 from .engine import extract_untrusted_texts, inspect_request, inspect_response
