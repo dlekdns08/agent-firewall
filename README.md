@@ -127,8 +127,11 @@ uv run pytest -q
 
 ## Scope & limits (honest)
 
-- Injection detection is **heuristic** — it catches common documented shapes,
-  not a guaranteed classifier. Treat it as defense-in-depth.
+- Injection detection is **heuristic** by default — it catches common
+  documented shapes, not a guaranteed classifier. Enable the LLM judge (above)
+  for novel-attack coverage. Treat it all as defense-in-depth.
+- The `check` CLI runs heuristics only (no network); the LLM judge runs in the
+  live proxy.
 - Streaming responses are buffered (not incrementally relayed), so the client
   sees the reply once the full turn is available — a latency/UX trade-off for
   full output enforcement.
