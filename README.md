@@ -23,8 +23,9 @@ money, running shell — the LLM call itself becomes an attack surface:
 - **Dangerous tool calls** execute with no human in the loop.
 
 `agent-firewall` is a single, framework-independent enforcement point for all
-three. Because it speaks the Anthropic Messages API, *any* agent — LangChain,
-a raw SDK loop, or one of your own frameworks — works unchanged.
+three. Because it speaks both the Anthropic Messages API and the OpenAI Chat
+Completions API, *any* agent — LangChain, a raw SDK loop, or one of your own
+frameworks — works unchanged.
 
 ## Install & run
 
@@ -44,6 +45,22 @@ export ANTHROPIC_API_KEY=sk-ant-...   # forwarded upstream
 ```python
 from anthropic import Anthropic
 client = Anthropic(base_url="http://127.0.0.1:8787")   # that's the whole change
+```
+
+### OpenAI-compatible too
+
+The same proxy exposes `/v1/chat/completions`, so OpenAI-SDK agents (and any
+OpenAI-compatible endpoint) are firewalled identically — same detectors,
+policy, and LLM judge:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-...")
+```
+
+```bash
+export OPENAI_API_KEY=sk-...     # forwarded upstream as a Bearer token
+# point openai_upstream.base_url at any OpenAI-compatible server in your policy
 ```
 
 ## What it does
@@ -136,7 +153,7 @@ uv run pytest -q
   sees the reply once the full turn is available — a latency/UX trade-off for
   full output enforcement.
 - Image / base64-document content can't be text-scanned (flagged, not blocked).
-- Anthropic Messages API only for now; OpenAI-compatible shim is a natural next step.
+- Supports the Anthropic Messages API and the OpenAI Chat Completions API.
 
 ## Layout
 
@@ -146,7 +163,8 @@ agent_firewall/
   engine.py       walks request/response payloads, applies detectors
   detectors/      pii.py · injection.py · actions.py
   judge.py        optional LLM second-stage classifier (escalate-only)
-  streaming.py    SSE parse / reconstruct / serialize
+  streaming.py    Anthropic SSE parse / reconstruct / serialize
+  openai_shim.py  OpenAI Chat Completions adapter (request/response/SSE)
   approvals.py    human-in-the-loop + JSONL audit log
   config.py       policy loading (YAML, deep-merged over defaults)
   cli.py          serve · check · version
