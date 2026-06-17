@@ -20,15 +20,18 @@ console = Console()
 
 @app.command()
 def serve(
-    host: str = typer.Option("127.0.0.1", help="Bind host."),
-    port: int = typer.Option(8787, help="Bind port."),
+    host: Optional[str] = typer.Option(None, help="Bind host (overrides config)."),
+    port: Optional[int] = typer.Option(None, help="Bind port (overrides config)."),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to policy YAML."),
 ) -> None:
     """Start the guardrail proxy (Anthropic Messages API compatible)."""
     cfg = Config.load(config)
+    host = host or cfg.server.host
+    port = port or cfg.server.port
     console.print(f"[bold green]agent-firewall {__version__}[/bold green]")
     console.print(f"  upstream      : {cfg.upstream.base_url}")
     console.print(f"  approval mode : {cfg.approval.mode}")
+    console.print(f"  auth token    : {'set' if cfg.server.auth_token else 'none (open on this host)'}")
     console.print(f"  listening on  : http://{host}:{port}")
     console.print(f"\n  Point your agent at [cyan]ANTHROPIC_BASE_URL=http://{host}:{port}[/cyan]\n")
 
