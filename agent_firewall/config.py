@@ -24,6 +24,8 @@ class PIIConfig(BaseModel):
     categories: list[str] = Field(default_factory=list)  # empty == all
     # What to do when PII is found in messages going to the model.
     action: Action = Action.MASK
+    # Also mask PII in the model's OUTPUT text before it returns to the agent.
+    scan_output: bool = True
 
 
 class InjectionConfig(BaseModel):
@@ -34,6 +36,9 @@ class InjectionConfig(BaseModel):
     # Score at/above which we escalate. Each rule contributes points.
     block_threshold: int = 5
     review_threshold: int = 3
+    # Sum injection score across all untrusted blocks in a request rather than
+    # scoring each block independently (defeats split-payload evasion).
+    aggregate_per_request: bool = True
 
 
 class ActionRule(BaseModel):
@@ -49,8 +54,13 @@ class ActionRule(BaseModel):
 
 class ActionsConfig(BaseModel):
     enabled: bool = True
-    # Default for any tool that matches no rule.
+    # Default for any tool that matches no rule and is not allowlisted.
+    # Set to require_approval/block to run in "allowlist mode": unknown tools
+    # are gated unless their name matches one of `allowlist`.
     default_action: Action = Action.ALLOW
+    # Regexes for tool names that are always considered safe (start at ALLOW).
+    # Dangerous-arg rules can still escalate an allowlisted tool.
+    allowlist: list[str] = Field(default_factory=list)
     rules: list[ActionRule] = Field(default_factory=list)
 
 
@@ -67,7 +77,16 @@ class UpstreamConfig(BaseModel):
     timeout_seconds: float = 600.0
 
 
+class ServerConfig(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 8787
+    # If set, clients must send this value as the `x-firewall-token` header.
+    # Protects the proxy (which holds the upstream API key) from local misuse.
+    auth_token: str | None = None
+
+
 class Config(BaseModel):
+    server: ServerConfig = Field(default_factory=ServerConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     pii: PIIConfig = Field(default_factory=PIIConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
@@ -83,9 +102,11 @@ class Config(BaseModel):
             user = _read_yaml(Path(path))
             data = _deep_merge(data, user)
         cfg = cls.model_validate(data)
-        # Env override for the upstream key is the common deployment case.
+        # Env overrides for the common deployment cases.
         if env_key := os.getenv("ANTHROPIC_API_KEY"):
             cfg.upstream.api_key = cfg.upstream.api_key or env_key
+        if env_token := os.getenv("FIREWALL_AUTH_TOKEN"):
+            cfg.server.auth_token = cfg.server.auth_token or env_token
         return cfg
 
 
