@@ -11,7 +11,11 @@ upstream:
   timeout_seconds: 600
 
 openai_upstream:                       # for the OpenAI-compatible shim (/v1/chat/completions)
-  base_url: "https://api.openai.com"   # any OpenAI-compatible endpoint works
+  base_url: "https://api.openai.com"   # Ollama: http://localhost:11434  ·  vLLM/LM Studio also work
+  timeout_seconds: 600
+
+gemini_upstream:                       # for the native Gemini shim (/v1beta/models/...:generateContent)
+  base_url: "https://generativelanguage.googleapis.com"
   timeout_seconds: 600
 
 pii:
