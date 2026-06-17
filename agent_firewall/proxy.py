@@ -188,14 +188,19 @@ async def _handle_stream(url, headers, body, cfg: Config, audit: AuditLog) -> Re
 
 
 async def _judge_input(body: dict[str, Any], in_decision: Decision, cfg: Config) -> Decision:
-    """Optional LLM injection judging on untrusted request content."""
+    """Optional LLM injection judging on untrusted Anthropic request content."""
     if not cfg.judge.enabled or cfg.judge.injection == "off":
         return in_decision
-    # escalate: skip if heuristics already blocked (nothing left to escalate).
     if cfg.judge.injection == "escalate" and in_decision.action == Action.BLOCK:
         return in_decision
-    targets = extract_untrusted_texts(body, cfg)
-    if not targets:
+    return await _judge_input_targets(extract_untrusted_texts(body, cfg), in_decision, cfg)
+
+
+async def _judge_input_targets(targets, in_decision: Decision, cfg: Config) -> Decision:
+    """Run the injection judge on already-extracted (text, location) targets."""
+    if not cfg.judge.enabled or cfg.judge.injection == "off" or not targets:
+        return in_decision
+    if cfg.judge.injection == "escalate" and in_decision.action == Action.BLOCK:
         return in_decision
     return in_decision.merge(await judge.judge_injection(targets, cfg))
 
@@ -268,6 +273,21 @@ def _forward_headers(headers: dict[str, str], cfg: Config) -> dict[str, str]:
         out["x-api-key"] = cfg.upstream.api_key
     out.setdefault("anthropic-version", "2023-06-01")
     return out
+
+
+def _forward_openai_headers(headers: dict[str, str], cfg: Config) -> dict[str, str]:
+    drop = _HOP_HEADERS | {"x-api-key", "anthropic-version"}
+    out = {k: v for k, v in headers.items() if k.lower() not in drop}
+    if cfg.openai_upstream.api_key:
+        out["authorization"] = f"Bearer {cfg.openai_upstream.api_key}"
+    return out
+
+
+def _chat_refusal(body: dict[str, Any], decision: Decision, message: str) -> Response:
+    completion = openai_shim.refusal_completion(body, decision, message)
+    if body.get("stream"):
+        return StreamingResponse(iter([openai_shim.serialize_chat(completion)]), media_type="text/event-stream")
+    return JSONResponse(completion)
 
 
 def _refusal(body: dict[str, Any], decision: Decision, message: str) -> Response:
