@@ -12,30 +12,16 @@ import re
 
 from ..models import Finding, Severity
 
-# Each entry: category -> (compiled regex, severity, redaction label)
+# Each entry: category -> (regex, severity, redaction label).
+# ORDER MATTERS: high-specificity secret patterns run first so a greedier
+# pattern (e.g. phone matching a digit run) can't eat part of a token before
+# its own rule fires. Phone (loosest) is therefore last.
 _RAW_PATTERNS: dict[str, tuple[str, Severity, str]] = {
-    "email": (
-        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
-        Severity.MEDIUM,
-        "EMAIL",
-    ),
-    # US SSN-style ###-##-####
-    "ssn": (
-        r"\b\d{3}-\d{2}-\d{4}\b",
-        Severity.HIGH,
-        "SSN",
-    ),
-    # 13-16 digit card numbers, optionally separated by spaces/dashes.
-    "credit_card": (
-        r"\b(?:\d[ -]*?){13,16}\b",
-        Severity.HIGH,
-        "CREDIT_CARD",
-    ),
-    # International-ish phone numbers (loose).
-    "phone": (
-        r"(?<!\d)(?:\+?\d{1,3}[ .-]?)?(?:\(?\d{2,4}\)?[ .-]?){2,4}\d{2,4}(?!\d)",
-        Severity.LOW,
-        "PHONE",
+    # Common API/secret token shapes (sk-..., ghp_..., xoxb-...)
+    "api_token": (
+        r"(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})",
+        Severity.CRITICAL,
+        "API_TOKEN",
     ),
     # AWS access key id
     "aws_key": (
@@ -43,11 +29,29 @@ _RAW_PATTERNS: dict[str, tuple[str, Severity, str]] = {
         Severity.CRITICAL,
         "AWS_KEY",
     ),
-    # Common API/secret token shapes (sk-..., ghp_..., xoxb-...)
-    "api_token": (
-        r"\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b",
-        Severity.CRITICAL,
-        "API_TOKEN",
+    # US SSN-style ###-##-####
+    "ssn": (
+        r"\b\d{3}-\d{2}-\d{4}\b",
+        Severity.HIGH,
+        "SSN",
+    ),
+    # 13-19 digit card numbers, optionally separated by single spaces/dashes.
+    # Greedy so the whole number is captured, then Luhn-validated.
+    "credit_card": (
+        r"\b\d(?:[ -]?\d){12,18}\b",
+        Severity.HIGH,
+        "CREDIT_CARD",
+    ),
+    "email": (
+        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+        Severity.MEDIUM,
+        "EMAIL",
+    ),
+    # International-ish phone numbers (loose) — kept last on purpose.
+    "phone": (
+        r"(?<!\d)(?:\+?\d{1,3}[ .-]?)?(?:\(?\d{2,4}\)?[ .-]?){2,4}\d{2,4}(?!\d)",
+        Severity.LOW,
+        "PHONE",
     ),
 }
 
