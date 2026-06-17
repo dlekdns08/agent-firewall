@@ -1,6 +1,11 @@
 # Default agent-firewall policy. Copy this file, edit, and pass with
 # `agent-firewall serve --config my_policy.yaml` to customize.
 
+server:
+  host: "127.0.0.1"     # bind to loopback by default
+  port: 8787
+  auth_token: null      # set (or export FIREWALL_AUTH_TOKEN) to require x-firewall-token
+
 upstream:
   base_url: "https://api.anthropic.com"
   timeout_seconds: 600
@@ -9,12 +14,14 @@ pii:
   enabled: true
   categories: []        # empty == all known categories
   action: mask          # mask | block | require_approval | allow
+  scan_output: true     # also mask PII in the model's reply
 
 injection:
   enabled: true
   scan_tool_results_only: true
   block_threshold: 5
   review_threshold: 3
+  aggregate_per_request: true   # sum score across blocks (defeats split payloads)
 
 approval:
   mode: console         # console | auto_allow | auto_deny
