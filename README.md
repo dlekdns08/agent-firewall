@@ -23,9 +23,9 @@ money, running shell — the LLM call itself becomes an attack surface:
 - **Dangerous tool calls** execute with no human in the loop.
 
 `agent-firewall` is a single, framework-independent enforcement point for all
-three. Because it speaks both the Anthropic Messages API and the OpenAI Chat
-Completions API, *any* agent — LangChain, a raw SDK loop, or one of your own
-frameworks — works unchanged.
+three. It speaks the **Anthropic Messages API**, the **OpenAI Chat Completions
+API** (incl. Ollama/vLLM/LM Studio), and **Google Gemini** — so *any* agent
+(LangChain, a raw SDK loop, or one of your own frameworks) works unchanged.
 
 ## Install & run
 
@@ -61,6 +61,59 @@ client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="sk-...")
 ```bash
 export OPENAI_API_KEY=sk-...     # forwarded upstream as a Bearer token
 # point openai_upstream.base_url at any OpenAI-compatible server in your policy
+```
+
+### Ollama / vLLM / LM Studio
+
+These all expose the OpenAI Chat Completions API, so they're firewalled via the
+same `/v1/chat/completions` route — just repoint the upstream:
+
+```yaml
+openai_upstream:
+  base_url: "http://localhost:11434"   # Ollama
+```
+
+### Gemini
+
+Google Gemini's native `generateContent` API is supported directly:
+
+```python
+import google.generativeai as genai
+genai.configure(api_key="...", transport="rest",
+                client_options={"api_endpoint": "http://127.0.0.1:8787"})
+```
+
+```bash
+export GEMINI_API_KEY=...   # forwarded upstream as x-goog-api-key
+```
+
+## Human-in-the-loop approval
+
+`approval.mode` chooses how `require_approval` decisions are resolved:
+
+| mode | behavior |
+| --- | --- |
+| `console` | prompt on stdin (y/N), serialized across concurrent requests |
+| `web` | hold the request; approve/deny in the **`/approvals`** browser UI |
+| `slack` | like `web`, plus a Slack notification with approve/deny links (`approval.slack_webhook`) |
+| `auto_allow` / `auto_deny` | headless / CI |
+
+`web`/`slack` work for concurrent server deployments — each pending request
+waits on its own decision and is released the moment a human clicks.
+
+## Metrics dashboard
+
+Set `audit_log` in your policy, then:
+
+- **`/dashboard`** — live HTML (block rate, actions, detectors, top findings)
+- **`/metrics.json`** — the same aggregates as JSON
+- **`agent-firewall stats`** — the same, in the terminal
+
+## Smoke test
+
+```bash
+agent-firewall smoke                       # mock upstream, full proxy pipeline, no key
+agent-firewall smoke --live --provider anthropic   # real provider via a running proxy
 ```
 
 ## What it does
@@ -153,7 +206,8 @@ uv run pytest -q
   sees the reply once the full turn is available — a latency/UX trade-off for
   full output enforcement.
 - Image / base64-document content can't be text-scanned (flagged, not blocked).
-- Supports the Anthropic Messages API and the OpenAI Chat Completions API.
+- Supports the Anthropic Messages, OpenAI Chat Completions, and Gemini
+  generateContent APIs. Gemini streaming is reconstructed into a single chunk.
 
 ## Layout
 
@@ -165,7 +219,10 @@ agent_firewall/
   judge.py        optional LLM second-stage classifier (escalate-only)
   streaming.py    Anthropic SSE parse / reconstruct / serialize
   openai_shim.py  OpenAI Chat Completions adapter (request/response/SSE)
-  approvals.py    human-in-the-loop + JSONL audit log
+  gemini_shim.py  Gemini generateContent adapter (request/response/SSE)
+  approvals.py    ApprovalManager (console/web/slack) + JSONL audit log
+  metrics.py      audit-log aggregation + HTML dashboard
+  smoke.py        end-to-end smoke test (mock + live)
   config.py       policy loading (YAML, deep-merged over defaults)
-  cli.py          serve · check · version
+  cli.py          serve · check · stats · smoke · version
 ```
