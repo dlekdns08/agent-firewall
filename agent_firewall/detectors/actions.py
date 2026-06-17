@@ -28,7 +28,12 @@ def classify(tool_name: str, tool_input: Any, cfg: ActionsConfig, *, location: s
         return Decision(action=Action.ALLOW)
 
     input_blob = _stringify(tool_input)
-    decision = Decision(action=cfg.default_action)
+
+    # Allowlisted tools start at ALLOW even when default_action gates the rest
+    # (allowlist mode). Dangerous-arg rules below can still escalate them.
+    allowlisted = any(re.search(p, tool_name) for p in cfg.allowlist)
+    base_action = Action.ALLOW if allowlisted else cfg.default_action
+    decision = Decision(action=base_action)
 
     for rule in cfg.rules:
         if not re.search(rule.tool_pattern, tool_name):
