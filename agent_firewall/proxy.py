@@ -25,10 +25,10 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import __version__
+from . import __version__, judge
 from .approvals import AuditLog, request_approval
 from .config import Config
-from .engine import inspect_request, inspect_response
+from .engine import extract_untrusted_texts, inspect_request, inspect_response
 from .models import Action, Decision
 from .streaming import parse_sse, reconstruct_message, serialize_message
 
@@ -60,6 +60,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
         # --- input guardrails ------------------------------------------------
         body, in_decision = inspect_request(body, cfg)
+        in_decision = await _judge_input(body, in_decision, cfg)
         _audit(audit, "request", in_decision, {"model": body.get("model")})
 
         if in_decision.action == Action.BLOCK:
@@ -90,6 +91,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
         resp_body = upstream.json()
         out_decision, tool_calls = inspect_response(resp_body, cfg)
+        out_decision = await _judge_actions(out_decision, tool_calls, cfg)
         _audit(audit, "response", out_decision, {"tools": [t["name"] for t in tool_calls]})
         resp_body = await _enforce_tool_calls(resp_body, tool_calls, cfg)
         return JSONResponse(resp_body)
@@ -123,6 +125,7 @@ async def _handle_stream(url, headers, body, cfg: Config, audit: AuditLog) -> Re
     message = reconstruct_message(events)
 
     out_decision, tool_calls = inspect_response(message, cfg)
+    out_decision = await _judge_actions(out_decision, tool_calls, cfg)
     _audit(audit, "response(stream)", out_decision, {"tools": [t["name"] for t in tool_calls]})
     sanitized = await _enforce_tool_calls(message, tool_calls, cfg)
 
