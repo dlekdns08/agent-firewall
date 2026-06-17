@@ -145,6 +145,8 @@ agent_firewall/
   proxy.py        FastAPI reverse proxy + enforcement
   engine.py       walks request/response payloads, applies detectors
   detectors/      pii.py · injection.py · actions.py
+  judge.py        optional LLM second-stage classifier (escalate-only)
+  streaming.py    SSE parse / reconstruct / serialize
   approvals.py    human-in-the-loop + JSONL audit log
   config.py       policy loading (YAML, deep-merged over defaults)
   cli.py          serve · check · version
