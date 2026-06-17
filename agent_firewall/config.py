@@ -77,6 +77,28 @@ class UpstreamConfig(BaseModel):
     timeout_seconds: float = 600.0
 
 
+class JudgeConfig(BaseModel):
+    """Optional LLM-based second-stage classifier for injection + actions.
+
+    Costs an extra (cheap, fast) model call, so it is opt-in. The judge can
+    only ESCALATE a heuristic verdict (never downgrade it), so a flaky judge
+    can't silently weaken the firewall.
+    """
+
+    enabled: bool = False
+    model: str = "claude-haiku-4-5"
+    # off | escalate | always
+    #   escalate — call the LLM only when heuristics did NOT already decide
+    #              (catches novel attacks + trims false positives)
+    #   always   — call the LLM on every item (max coverage, max cost)
+    injection: str = "escalate"
+    actions: str = "escalate"
+    max_chars: int = 4000          # truncate content sent to the judge
+    timeout_seconds: float = 20.0
+    fail_closed: bool = False      # on judge error: require_approval (True) or allow (False)
+    cache: bool = True
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8787
@@ -91,6 +113,7 @@ class Config(BaseModel):
     pii: PIIConfig = Field(default_factory=PIIConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
     actions: ActionsConfig = Field(default_factory=ActionsConfig)
+    judge: JudgeConfig = Field(default_factory=JudgeConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     # Append every decision as JSONL here when set.
     audit_log: str | None = None
