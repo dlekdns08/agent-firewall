@@ -29,8 +29,21 @@ approval:
 
 actions:
   enabled: true
+  # Set default_action to require_approval (or block) for allowlist mode:
+  # every tool not listed in `allowlist` (and not matched by a rule) is gated.
   default_action: allow
+  allowlist: []         # regexes of always-safe tool names, e.g. ["^get_.*", "^read_.*"]
   rules:
+    # Catches dangerous intent expressed in ARGS regardless of tool name,
+    # e.g. a generic tool {"name":"fs_op","input":{"op":"delete"}}.
+    - name: "destructive-op-in-args"
+      tool_pattern: ".*"
+      arg_patterns:
+        - "\"(op|operation|action|method|cmd|verb)\"\\s*:\\s*\"(?i)(delete|destroy|remove|drop|truncate|wipe|purge|erase)\""
+      action: require_approval
+      severity: high
+      reason: "Destructive operation specified in arguments"
+
     - name: "filesystem-destructive"
       tool_pattern: "(?i)(delete|remove|rm|unlink|rmdir|truncate|drop).*file|.*file.*(delete|remove)|^(rm|delete_file|remove_file|unlink)$"
       action: require_approval
