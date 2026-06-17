@@ -39,7 +39,7 @@ actions:
     - name: "destructive-op-in-args"
       tool_pattern: ".*"
       arg_patterns:
-        - "\"(op|operation|action|method|cmd|verb)\"\\s*:\\s*\"(?i)(delete|destroy|remove|drop|truncate|wipe|purge|erase)\""
+        - "(?i)\"(op|operation|action|method|cmd|verb)\"\\s*:\\s*\"(delete|destroy|remove|drop|truncate|wipe|purge|erase)\""
       action: require_approval
       severity: high
       reason: "Destructive operation specified in arguments"
