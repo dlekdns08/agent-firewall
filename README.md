@@ -83,12 +83,32 @@ uv run agent-firewall check examples/sample_response.json --kind response
 uv run pytest -q
 ```
 
+## Hardening (what's enforced)
+
+- **Streaming** is fully covered: the SSE stream is buffered, the message
+  reconstructed, output guardrails applied, then replayed — `stream: true`
+  cannot smuggle a dangerous tool call past the policy.
+- **Allowlist mode**: set `actions.default_action: require_approval` and list
+  safe tools in `actions.allowlist` so unknown tools are gated by default.
+- **Arg-based rules** catch dangerous intent regardless of tool name
+  (e.g. `{"name":"fs_op","input":{"op":"delete"}}`).
+- **Output PII** in the model's reply is masked (`pii.scan_output`).
+- **Injection scoring is aggregated** across all untrusted blocks
+  (`injection.aggregate_per_request`) so split payloads can't dodge the threshold.
+- Non-text tool results (images, base64 docs) are flagged as a coverage gap in
+  the audit log rather than silently passed.
+- Concurrent **approvals are serialized** (no stdin races).
+- Set `server.auth_token` (or `FIREWALL_AUTH_TOKEN`) to require an
+  `x-firewall-token` header; the proxy binds to `127.0.0.1` by default.
+
 ## Scope & limits (honest)
 
 - Injection detection is **heuristic** — it catches common documented shapes,
   not a guaranteed classifier. Treat it as defense-in-depth.
-- **Streaming** requests get input guardrails; output action-scanning is not
-  enforced on the token stream (planned).
+- Streaming responses are buffered (not incrementally relayed), so the client
+  sees the reply once the full turn is available — a latency/UX trade-off for
+  full output enforcement.
+- Image / base64-document content can't be text-scanned (flagged, not blocked).
 - Anthropic Messages API only for now; OpenAI-compatible shim is a natural next step.
 
 ## Layout
