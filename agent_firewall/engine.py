@@ -74,6 +74,53 @@ def inspect_request(body: dict[str, Any], cfg: Config) -> tuple[dict[str, Any], 
     return body, decision
 
 
+def extract_untrusted_texts(body: dict[str, Any], cfg: Config) -> list[tuple[str, str]]:
+    """Return (text, location) spans considered untrusted, for LLM judging.
+
+    Mirrors which content ``inspect_request`` scans for injection: tool_result
+    text/document-text (always), plus user/assistant text when
+    ``scan_tool_results_only`` is False. Call this on the body returned by
+    ``inspect_request`` so it reflects post-masking content.
+    """
+    targets: list[tuple[str, str]] = []
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return targets
+
+    for mi, message in enumerate(messages):
+        content = message.get("content")
+        if isinstance(content, str):
+            if _should_scan_injection(is_tool_result=False, cfg=cfg):
+                targets.append((content, f"messages[{mi}].content"))
+            continue
+        if not isinstance(content, list):
+            continue
+        for bi, block in enumerate(content):
+            if not isinstance(block, dict):
+                continue
+            loc = f"messages[{mi}].content[{bi}]"
+            if block.get("type") == "text":
+                if _should_scan_injection(is_tool_result=False, cfg=cfg):
+                    targets.append((block.get("text", ""), f"{loc}.text"))
+            elif block.get("type") == "tool_result":
+                _collect_tool_result_texts(block.get("content"), loc, targets)
+    return [(t, l) for t, l in targets if t]
+
+
+def _collect_tool_result_texts(content: Any, location: str, out: list[tuple[str, str]]) -> None:
+    if isinstance(content, str):
+        out.append((content, location))
+    elif isinstance(content, list):
+        for bi, sub in enumerate(content):
+            if not isinstance(sub, dict):
+                continue
+            if sub.get("type") == "text":
+                out.append((sub.get("text", ""), f"{location}.content[{bi}].text"))
+            elif sub.get("type") == "document" and isinstance(sub.get("source"), dict) \
+                    and sub["source"].get("type") == "text":
+                out.append((sub["source"].get("data", ""), f"{location}.content[{bi}].source.data"))
+
+
 def inspect_response(body: dict[str, Any], cfg: Config) -> tuple[Decision, list[dict[str, Any]]]:
     """Scan a model response in place. Returns (overall_decision, tool_calls).
 
