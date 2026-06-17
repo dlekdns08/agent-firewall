@@ -1,0 +1,75 @@
+# Default agent-firewall policy. Copy this file, edit, and pass with
+# `agent-firewall serve --config my_policy.yaml` to customize.
+
+upstream:
+  base_url: "https://api.anthropic.com"
+  timeout_seconds: 600
+
+pii:
+  enabled: true
+  categories: []        # empty == all known categories
+  action: mask          # mask | block | require_approval | allow
+
+injection:
+  enabled: true
+  scan_tool_results_only: true
+  block_threshold: 5
+  review_threshold: 3
+
+approval:
+  mode: console         # console | auto_allow | auto_deny
+  timeout_seconds: 120
+
+actions:
+  enabled: true
+  default_action: allow
+  rules:
+    - name: "filesystem-destructive"
+      tool_pattern: "(?i)(delete|remove|rm|unlink|rmdir|truncate|drop).*file|.*file.*(delete|remove)|^(rm|delete_file|remove_file|unlink)$"
+      action: require_approval
+      severity: high
+      reason: "Destructive filesystem operation"
+
+    - name: "shell-execution"
+      tool_pattern: "(?i)^(bash|shell|exec|run_command|execute|terminal|subprocess)$"
+      action: require_approval
+      severity: high
+      reason: "Arbitrary command execution"
+
+    - name: "shell-dangerous-args"
+      tool_pattern: "(?i)(bash|shell|exec|command|terminal)"
+      arg_patterns:
+        - "rm\\s+-rf"
+        - ":\\(\\)\\s*\\{.*\\}"        # fork bomb
+        - "mkfs|dd\\s+if=|>\\s*/dev/sd"
+        - "curl[^|]*\\|\\s*(sh|bash)"   # curl | sh
+      action: block
+      severity: critical
+      reason: "Known-dangerous shell command pattern"
+
+    - name: "money-transfer"
+      tool_pattern: "(?i)(transfer|payment|pay|charge|refund|wire|send_money|checkout|invoice)"
+      action: require_approval
+      severity: critical
+      reason: "Financial transaction"
+
+    - name: "outbound-email"
+      tool_pattern: "(?i)(send_email|send_mail|email_send|smtp|sendgrid|send_message|send_sms)"
+      action: require_approval
+      severity: high
+      reason: "Outbound message to a third party"
+
+    - name: "secrets-access"
+      tool_pattern: "(?i)(env|secret|credential|vault|keychain|getenv)"
+      action: require_approval
+      severity: high
+      reason: "Access to secrets/credentials"
+
+    - name: "external-http-write"
+      tool_pattern: "(?i)(http_post|http_put|http_delete|post_request|api_call|webhook)"
+      action: require_approval
+      severity: medium
+      reason: "State-changing outbound HTTP request"
+
+# Optional: write every decision as JSONL for audit/forensics.
+audit_log: null
