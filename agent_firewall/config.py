@@ -119,6 +119,7 @@ class ServerConfig(BaseModel):
 class Config(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
+    openai_upstream: OpenAIUpstreamConfig = Field(default_factory=OpenAIUpstreamConfig)
     pii: PIIConfig = Field(default_factory=PIIConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
     actions: ActionsConfig = Field(default_factory=ActionsConfig)
@@ -137,6 +138,8 @@ class Config(BaseModel):
         # Env overrides for the common deployment cases.
         if env_key := os.getenv("ANTHROPIC_API_KEY"):
             cfg.upstream.api_key = cfg.upstream.api_key or env_key
+        if env_oai := os.getenv("OPENAI_API_KEY"):
+            cfg.openai_upstream.api_key = cfg.openai_upstream.api_key or env_oai
         if env_token := os.getenv("FIREWALL_AUTH_TOKEN"):
             cfg.server.auth_token = cfg.server.auth_token or env_token
         return cfg
