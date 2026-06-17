@@ -134,6 +134,33 @@ async def _handle_stream(url, headers, body, cfg: Config, audit: AuditLog) -> Re
     return StreamingResponse(iter([payload]), media_type="text/event-stream")
 
 
+async def _judge_input(body: dict[str, Any], in_decision: Decision, cfg: Config) -> Decision:
+    """Optional LLM injection judging on untrusted request content."""
+    if not cfg.judge.enabled or cfg.judge.injection == "off":
+        return in_decision
+    # escalate: skip if heuristics already blocked (nothing left to escalate).
+    if cfg.judge.injection == "escalate" and in_decision.action == Action.BLOCK:
+        return in_decision
+    targets = extract_untrusted_texts(body, cfg)
+    if not targets:
+        return in_decision
+    return in_decision.merge(await judge.judge_injection(targets, cfg))
+
+
+async def _judge_actions(out_decision: Decision, tool_calls: list[dict[str, Any]], cfg: Config) -> Decision:
+    """Optional LLM judging of each tool call. Mutates call decisions in place."""
+    if not cfg.judge.enabled or cfg.judge.actions == "off" or not tool_calls:
+        return out_decision
+    for call in tool_calls:
+        # escalate: only judge tools the heuristics let through.
+        if cfg.judge.actions == "escalate" and call["decision"].action != Action.ALLOW:
+            continue
+        verdict = await judge.judge_action(call["name"], call["input"], f"tool:{call['name']}", cfg)
+        call["decision"] = call["decision"].merge(verdict)
+        out_decision = out_decision.merge(verdict)
+    return out_decision
+
+
 async def _enforce_tool_calls(
     resp_body: dict[str, Any], tool_calls: list[dict[str, Any]], cfg: Config
 ) -> dict[str, Any]:
