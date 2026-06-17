@@ -293,3 +293,11 @@ def _top_severity(findings: list[Finding]) -> Severity:
     for f in findings:
         sev = max_severity(sev, f.severity)
     return sev
+
+
+# Public aliases — reused by the OpenAI shim so both API formats share the
+# exact same PII/injection/coverage logic.
+mask_pii = _mask_pii
+score_injection = _score_injection
+should_scan_injection = _should_scan_injection
+unscannable = _unscannable
