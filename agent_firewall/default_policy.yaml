@@ -23,6 +23,16 @@ injection:
   review_threshold: 3
   aggregate_per_request: true   # sum score across blocks (defeats split payloads)
 
+judge:
+  enabled: false        # opt-in LLM second-stage classifier (needs API key, adds latency/cost)
+  model: "claude-haiku-4-5"
+  injection: escalate   # off | escalate | always
+  actions: escalate     # off | escalate | always
+  max_chars: 4000
+  timeout_seconds: 20
+  fail_closed: false    # on judge error: require_approval (true) or allow (false)
+  cache: true
+
 approval:
   mode: console         # console | auto_allow | auto_deny
   timeout_seconds: 120
