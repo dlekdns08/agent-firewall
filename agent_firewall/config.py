@@ -65,9 +65,15 @@ class ActionsConfig(BaseModel):
 
 
 class ApprovalConfig(BaseModel):
-    # "console" prompts on stdin; "auto_deny"/"auto_allow" for headless/tests.
+    # console | auto_allow | auto_deny | web | slack
+    #   web   — hold the request; approve/deny via the /approvals HTTP UI
+    #   slack — like web, plus a Slack notification with approve/deny links
     mode: str = "console"
     timeout_seconds: float = 120.0
+    # Slack incoming-webhook URL (slack mode).
+    slack_webhook: str | None = None
+    # Base URL used to build approve/deny links; defaults to the server addr.
+    public_url: str | None = None
 
 
 class UpstreamConfig(BaseModel):
@@ -108,6 +114,15 @@ class OpenAIUpstreamConfig(BaseModel):
     timeout_seconds: float = 600.0
 
 
+class GeminiUpstreamConfig(BaseModel):
+    """Upstream for the native Gemini shim (/v1beta/models/...:generateContent)."""
+
+    base_url: str = "https://generativelanguage.googleapis.com"
+    # If set, forces this key (sent as `x-goog-api-key`).
+    api_key: str | None = None
+    timeout_seconds: float = 600.0
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8787
@@ -120,6 +135,7 @@ class Config(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     upstream: UpstreamConfig = Field(default_factory=UpstreamConfig)
     openai_upstream: OpenAIUpstreamConfig = Field(default_factory=OpenAIUpstreamConfig)
+    gemini_upstream: GeminiUpstreamConfig = Field(default_factory=GeminiUpstreamConfig)
     pii: PIIConfig = Field(default_factory=PIIConfig)
     injection: InjectionConfig = Field(default_factory=InjectionConfig)
     actions: ActionsConfig = Field(default_factory=ActionsConfig)
@@ -140,6 +156,8 @@ class Config(BaseModel):
             cfg.upstream.api_key = cfg.upstream.api_key or env_key
         if env_oai := os.getenv("OPENAI_API_KEY"):
             cfg.openai_upstream.api_key = cfg.openai_upstream.api_key or env_oai
+        if env_gem := (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")):
+            cfg.gemini_upstream.api_key = cfg.gemini_upstream.api_key or env_gem
         if env_token := os.getenv("FIREWALL_AUTH_TOKEN"):
             cfg.server.auth_token = cfg.server.auth_token or env_token
         return cfg
