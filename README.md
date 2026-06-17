@@ -58,6 +58,30 @@ When an action needs approval, the proxy prompts on the console (`y/N`); deny
 or timeout neutralizes the tool call before it ever reaches your agent. Set
 `approval.mode: auto_deny` for headless/CI safety.
 
+## LLM judge (optional second stage)
+
+Heuristics are cheap but pattern-bound. Enable an LLM second stage to catch
+what they miss — **novel prompt injections** and **dangerous tools with
+innocuous names** — using a small, fast model:
+
+```yaml
+judge:
+  enabled: true
+  model: "claude-haiku-4-5"
+  injection: escalate   # off | escalate | always
+  actions: escalate
+  fail_closed: false    # on judge error: require_approval (true) or allow (false)
+```
+
+- **escalate** (default) only calls the model when the heuristics didn't
+  already decide — so clear positives cost nothing and the model resolves the
+  gray zone. **always** judges every item.
+- The judge is **escalate-only by construction**: verdicts merge with
+  most-restrictive-wins, so it can tighten a decision but never weaken one. A
+  flaky judge can't silently disable the firewall.
+- Verdicts are cached by content hash; the judge calls the upstream API
+  directly (not through the proxy), so there's no recursion.
+
 ## Configure
 
 Everything is policy-driven. Copy the bundled defaults and edit:
