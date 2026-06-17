@@ -115,16 +115,18 @@ def inspect_chat_response(body: dict[str, Any], cfg: Config) -> tuple[Decision, 
 
 
 async def enforce_chat_tool_calls(body: dict[str, Any], tool_calls: list[dict[str, Any]], cfg: Config,
-                                  request_approval) -> dict[str, Any]:
-    """Drop blocked/denied tool calls from the completion."""
+                                  approve) -> dict[str, Any]:
+    """Drop blocked/denied tool calls from the completion.
+
+    ``approve`` is an async callable(summary=, decision=, payload=) -> bool.
+    """
     blocked_ids: set[str] = set()
     for call in tool_calls:
         decision: Decision = call["decision"]
         if decision.action == Action.BLOCK:
             blocked_ids.add(call["id"])
         elif decision.action == Action.REQUIRE_APPROVAL:
-            ok = await request_approval(
-                cfg.approval,
+            ok = await approve(
                 summary=f"Agent wants to call tool '{call['name']}'.",
                 decision=decision,
                 payload={"tool": call["name"], "input": call["input"]},
