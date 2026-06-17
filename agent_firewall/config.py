@@ -99,6 +99,15 @@ class JudgeConfig(BaseModel):
     cache: bool = True
 
 
+class OpenAIUpstreamConfig(BaseModel):
+    """Upstream for the OpenAI-compatible shim (/v1/chat/completions)."""
+
+    base_url: str = "https://api.openai.com"
+    # If set, forces this key (sent as `Authorization: Bearer ...`).
+    api_key: str | None = None
+    timeout_seconds: float = 600.0
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8787
