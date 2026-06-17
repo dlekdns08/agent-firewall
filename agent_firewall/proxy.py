@@ -4,12 +4,16 @@ Point your agent's ``base_url`` at this server and it transparently forwards
 to the real Anthropic API, applying guardrails on the way in and out:
 
   request  → [input guardrails: injection scan, PII mask] → upstream
-  upstream → [output guardrails: dangerous-action policy + approval] → agent
+  upstream → [output guardrails: PII mask, action policy + approval] → agent
 
 Enforcement:
   * input BLOCK            → short-circuit with a synthetic refusal message
   * input REQUIRE_APPROVAL → ask human; deny → synthetic refusal
   * output tool_use BLOCK / denied approval → neutralize that tool_use block
+
+Streaming responses are buffered, reconstructed, and run through the same
+output guardrails before being (re)emitted, so dangerous tool calls cannot
+slip through by setting ``stream: true``.
 """
 
 from __future__ import annotations
@@ -26,9 +30,10 @@ from .approvals import AuditLog, request_approval
 from .config import Config
 from .engine import inspect_request, inspect_response
 from .models import Action, Decision
+from .streaming import parse_sse, reconstruct_message, serialize_message
 
 # Headers we must not forward verbatim to upstream / back to client.
-_HOP_HEADERS = {"host", "content-length", "connection", "accept-encoding"}
+_HOP_HEADERS = {"host", "content-length", "connection", "accept-encoding", "x-firewall-token"}
 
 
 def create_app(cfg: Config | None = None) -> FastAPI:
@@ -44,11 +49,14 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @app.post("/v1/messages")
     async def messages(request: Request) -> Response:
+        if (err := _check_auth(request, cfg)) is not None:
+            return err
+
         raw = await request.body()
         try:
             body = json.loads(raw)
         except json.JSONDecodeError:
-            return JSONResponse({"type": "error", "error": {"type": "invalid_request_error", "message": "body is not valid JSON"}}, status_code=400)
+            return _error("invalid_request_error", "body is not valid JSON", 400)
 
         # --- input guardrails ------------------------------------------------
         body, in_decision = inspect_request(body, cfg)
@@ -59,7 +67,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         if in_decision.action == Action.REQUIRE_APPROVAL:
             ok = await request_approval(
                 cfg.approval,
-                summary="Suspicious content detected in request (possible prompt injection).",
+                summary="Suspicious content in request (possible prompt injection).",
                 decision=in_decision,
                 payload={"model": body.get("model")},
             )
@@ -67,32 +75,60 @@ def create_app(cfg: Config | None = None) -> FastAPI:
                 return _refusal(body, in_decision, "Request denied by human reviewer (input guardrail).")
 
         is_stream = bool(body.get("stream"))
-
-        # --- forward to upstream --------------------------------------------
         upstream_headers = _forward_headers(dict(request.headers), cfg)
         url = cfg.upstream.base_url.rstrip("/") + "/v1/messages"
 
         if is_stream:
-            # Streaming: input guardrails already applied; output action
-            # scanning is not enforced on the token stream (documented limit).
-            return await _proxy_stream(url, upstream_headers, body, cfg)
+            return await _handle_stream(url, upstream_headers, body, cfg, audit)
 
         async with httpx.AsyncClient(timeout=cfg.upstream.timeout_seconds) as client:
             upstream = await client.post(url, headers=upstream_headers, json=body)
 
         if upstream.status_code != 200:
-            return Response(content=upstream.content, status_code=upstream.status_code, media_type=upstream.headers.get("content-type", "application/json"))
+            return Response(content=upstream.content, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/json"))
 
         resp_body = upstream.json()
-
-        # --- output guardrails ----------------------------------------------
         out_decision, tool_calls = inspect_response(resp_body, cfg)
         _audit(audit, "response", out_decision, {"tools": [t["name"] for t in tool_calls]})
-
         resp_body = await _enforce_tool_calls(resp_body, tool_calls, cfg)
         return JSONResponse(resp_body)
 
+    @app.post("/v1/messages/count_tokens")
+    async def count_tokens(request: Request) -> Response:
+        # Token counting is read-only; forward with the same auth + key handling.
+        if (err := _check_auth(request, cfg)) is not None:
+            return err
+        raw = await request.body()
+        headers = _forward_headers(dict(request.headers), cfg)
+        url = cfg.upstream.base_url.rstrip("/") + "/v1/messages/count_tokens"
+        async with httpx.AsyncClient(timeout=cfg.upstream.timeout_seconds) as client:
+            upstream = await client.post(url, headers=headers, content=raw)
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        media_type=upstream.headers.get("content-type", "application/json"))
+
     return app
+
+
+async def _handle_stream(url, headers, body, cfg: Config, audit: AuditLog) -> Response:
+    """Buffer the SSE stream, enforce output guardrails, then (re)emit."""
+    async with httpx.AsyncClient(timeout=cfg.upstream.timeout_seconds) as client:
+        upstream = await client.post(url, headers=headers, json=body)
+        if upstream.status_code != 200:
+            return Response(content=upstream.content, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/json"))
+        raw_text = upstream.text
+
+    events = parse_sse(raw_text)
+    message = reconstruct_message(events)
+
+    out_decision, tool_calls = inspect_response(message, cfg)
+    _audit(audit, "response(stream)", out_decision, {"tools": [t["name"] for t in tool_calls]})
+    sanitized = await _enforce_tool_calls(message, tool_calls, cfg)
+
+    changed = out_decision.action != Action.ALLOW or bool(out_decision.findings)
+    payload = serialize_message(sanitized) if changed else raw_text
+    return StreamingResponse(iter([payload]), media_type="text/event-stream")
 
 
 async def _enforce_tool_calls(
@@ -130,24 +166,17 @@ async def _enforce_tool_calls(
             new_content.append(block)
     resp_body["content"] = new_content
 
-    # If no tool_use blocks remain, the turn is effectively done.
     if not any(b.get("type") == "tool_use" for b in new_content):
         resp_body["stop_reason"] = "end_turn"
     return resp_body
 
 
-async def _proxy_stream(url: str, headers: dict[str, str], body: dict[str, Any], cfg: Config) -> StreamingResponse:
-    client = httpx.AsyncClient(timeout=cfg.upstream.timeout_seconds)
-
-    async def gen():
-        try:
-            async with client.stream("POST", url, headers=headers, json=body) as upstream:
-                async for chunk in upstream.aiter_raw():
-                    yield chunk
-        finally:
-            await client.aclose()
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+def _check_auth(request: Request, cfg: Config) -> Response | None:
+    if not cfg.server.auth_token:
+        return None
+    if request.headers.get("x-firewall-token") == cfg.server.auth_token:
+        return None
+    return _error("authentication_error", "missing or invalid x-firewall-token", 401)
 
 
 def _forward_headers(headers: dict[str, str], cfg: Config) -> dict[str, str]:
@@ -158,21 +187,29 @@ def _forward_headers(headers: dict[str, str], cfg: Config) -> dict[str, str]:
     return out
 
 
-def _refusal(body: dict[str, Any], decision: Decision, message: str) -> JSONResponse:
-    """Return a well-formed Anthropic message that conveys the block."""
+def _refusal(body: dict[str, Any], decision: Decision, message: str) -> Response:
+    """Return a well-formed Anthropic message that conveys the block.
+
+    Honors stream mode so a streaming client still gets a valid SSE stream.
+    """
     reasons = "; ".join(f.title for f in decision.findings) or decision.reason
-    return JSONResponse(
-        {
-            "id": "msg_firewall_block",
-            "type": "message",
-            "role": "assistant",
-            "model": body.get("model", "unknown"),
-            "content": [{"type": "text", "text": f"{message} ({reasons})"}],
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        }
-    )
+    msg = {
+        "id": "msg_firewall_block",
+        "type": "message",
+        "role": "assistant",
+        "model": body.get("model", "unknown"),
+        "content": [{"type": "text", "text": f"{message} ({reasons})"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+    if body.get("stream"):
+        return StreamingResponse(iter([serialize_message(msg)]), media_type="text/event-stream")
+    return JSONResponse(msg)
+
+
+def _error(etype: str, message: str, status: int) -> JSONResponse:
+    return JSONResponse({"type": "error", "error": {"type": etype, "message": message}}, status_code=status)
 
 
 def _audit(audit: AuditLog, phase: str, decision: Decision, extra: dict[str, Any]) -> None:
