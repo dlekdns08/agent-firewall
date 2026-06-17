@@ -10,6 +10,10 @@ upstream:
   base_url: "https://api.anthropic.com"
   timeout_seconds: 600
 
+openai_upstream:                       # for the OpenAI-compatible shim (/v1/chat/completions)
+  base_url: "https://api.openai.com"   # any OpenAI-compatible endpoint works
+  timeout_seconds: 600
+
 pii:
   enabled: true
   categories: []        # empty == all known categories
