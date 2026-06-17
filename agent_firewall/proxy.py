@@ -96,6 +96,59 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         resp_body = await _enforce_tool_calls(resp_body, tool_calls, cfg)
         return JSONResponse(resp_body)
 
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> Response:
+        if (err := _check_auth(request, cfg)) is not None:
+            return err
+        raw = await request.body()
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            return _error("invalid_request_error", "body is not valid JSON", 400)
+
+        # --- input guardrails ------------------------------------------------
+        body, in_decision, targets = openai_shim.inspect_chat_request(body, cfg)
+        in_decision = await _judge_input_targets(targets, in_decision, cfg)
+        _audit(audit, "chat.request", in_decision, {"model": body.get("model")})
+
+        if in_decision.action == Action.BLOCK:
+            return _chat_refusal(body, in_decision, "Request blocked by agent-firewall (input guardrail).")
+        if in_decision.action == Action.REQUIRE_APPROVAL:
+            ok = await request_approval(
+                cfg.approval,
+                summary="Suspicious content in request (possible prompt injection).",
+                decision=in_decision, payload={"model": body.get("model")},
+            )
+            if not ok:
+                return _chat_refusal(body, in_decision, "Request denied by human reviewer (input guardrail).")
+
+        is_stream = bool(body.get("stream"))
+        headers = _forward_openai_headers(dict(request.headers), cfg)
+        url = cfg.openai_upstream.base_url.rstrip("/") + "/v1/chat/completions"
+
+        async with httpx.AsyncClient(timeout=cfg.openai_upstream.timeout_seconds) as client:
+            upstream = await client.post(url, headers=headers, json=body)
+        if upstream.status_code != 200:
+            return Response(content=upstream.content, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/json"))
+
+        if is_stream:
+            completion = openai_shim.reconstruct_chat(openai_shim.parse_openai_sse(upstream.text))
+            out_decision, tool_calls = openai_shim.inspect_chat_response(completion, cfg)
+            out_decision = await _judge_actions(out_decision, tool_calls, cfg)
+            _audit(audit, "chat.response(stream)", out_decision, {"tools": [t["name"] for t in tool_calls]})
+            sanitized = await openai_shim.enforce_chat_tool_calls(completion, tool_calls, cfg, request_approval)
+            changed = out_decision.action != Action.ALLOW or bool(out_decision.findings)
+            payload = openai_shim.serialize_chat(sanitized) if changed else upstream.text
+            return StreamingResponse(iter([payload]), media_type="text/event-stream")
+
+        completion = upstream.json()
+        out_decision, tool_calls = openai_shim.inspect_chat_response(completion, cfg)
+        out_decision = await _judge_actions(out_decision, tool_calls, cfg)
+        _audit(audit, "chat.response", out_decision, {"tools": [t["name"] for t in tool_calls]})
+        completion = await openai_shim.enforce_chat_tool_calls(completion, tool_calls, cfg, request_approval)
+        return JSONResponse(completion)
+
     @app.post("/v1/messages/count_tokens")
     async def count_tokens(request: Request) -> Response:
         # Token counting is read-only; forward with the same auth + key handling.
