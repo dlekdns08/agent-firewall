@@ -25,6 +25,11 @@ from .models import Decision
 
 _console = Console(stderr=True)
 
+# Serializes console prompts: a single stdin can only answer one question at a
+# time, so concurrent requests must queue or their answers would interleave and
+# get matched to the wrong request.
+_console_lock = asyncio.Lock()
+
 
 async def request_approval(
     cfg: ApprovalConfig, *, summary: str, decision: Decision, payload: dict[str, Any]
@@ -38,6 +43,13 @@ async def request_approval(
         # Unknown mode → fail closed.
         return False
 
+    async with _console_lock:
+        return await _console_prompt(cfg, summary=summary, decision=decision, payload=payload)
+
+
+async def _console_prompt(
+    cfg: ApprovalConfig, *, summary: str, decision: Decision, payload: dict[str, Any]
+) -> bool:
     findings = "\n".join(
         f"  • [{f.severity.value}] {f.title} — {f.detail}" for f in decision.findings
     )
